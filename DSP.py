@@ -3,24 +3,42 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import butter, filtfilt, find_peaks,freqz,tf2zpk,lfilter,group_delay
 import  warnings
+
 # 1. Bandpass Filter (5-15 Hz)
-def bandpass_filter(signal, fs=200, lowcut=5.0, highcut=15.0, order=4):
-    nyq = 0.5 * fs
-    low = lowcut / nyq
-    high = highcut / nyq
-    b, a = butter(order, [low, high], btype='band')
-    filtered_signal = filtfilt(b, a, signal)
-    plot_signal(filtered_signal, "Bandpass Filtered Signal (5-15 Hz)", fs)
-    return filtered_signal
+def bandpass_filter(signal):
+    """
+    Implements the Pan-Tompkins bandpass filter by cascading:
+    - Low-pass filter: cutoff ~11 Hz
+    - High-pass filter: cutoff ~5 Hz
+    Sampling rate = 200 Hz, integer coefficients
+    """
+    # Low-pass filter: y(n) = 2y(n-1) - y(n-2) + x(n) - 2x(n-6) + x(n-12)
+    lp = np.zeros_like(signal)
+    for n in range(12, len(signal)):
+        lp[n] = 2 * lp[n-1] - lp[n-2] + signal[n] - 2 * signal[n-6] + signal[n-12]
+
+    # High-pass filter: y(n) = y(n-1) - x(n)/32 + x(n-16) - x(n-17) + x(n-32)/32
+    hp = np.zeros_like(lp)
+    for n in range(32, len(lp)):
+        hp[n] = hp[n-1] - lp[n] / 32 + lp[n-16] - lp[n-17] + lp[n-32] / 32
+
+    plot_signal(hp, "Bandpass Filtered Signal", fs=200)
+    return hp
+
 
 
 # 2. Derivative Filter
-def derivative(signal):
-    diff_signal = np.diff(signal)
-    # Pad to maintain length
-    diff_signal = np.concatenate(([diff_signal[0]], diff_signal))
-    plot_signal(diff_signal, "Derivative of Signal", len(signal))
-    return diff_signal
+def derivative(signal, fs=200):
+    """
+    Implements the 5-point derivative used in Pan-Tompkins algorithm.
+    """
+    deriv = np.zeros_like(signal)
+    for n in range(2, len(signal)-2):
+        deriv[n] = (1/8) * (-signal[n-2] - 2*signal[n-1] + 2*signal[n+1] + signal[n+2])
+
+    plot_signal(deriv, "Derivative of Signal", fs)
+    return deriv
+
 
 
 # 3. Squaring Function
@@ -32,24 +50,38 @@ def squaring(signal):
 
 # 4. Moving Window Integration
 def moving_window_integration(signal, window_size=30):
+    # window_size: number of samples in the moving window.
     window = np.ones(window_size) / window_size
+    """
+        This line performs convolution, which means:
+          Slide the averaging window across the signal.
+          At each point, multiply-and-sum the overlapping values → get a smoothed version of the signal.
+        mode='same' ensures the output signal is the same length as the input.
+    """
     integrated_signal = np.convolve(signal, window, mode='same')
     plot_signal(integrated_signal, "Integrated Signal (Moving Window)", len(signal))
     return integrated_signal
 
 
 # 5. Static Thresholding (modified to return peaks)
-def static_threshold(signal, fs=200):
+def static_threshold(signal, fs=200, plot_only=False):
     mean_signal = np.mean(signal)
     std_signal = np.std(signal)
+    #std stands for standard deviation, it measures how much the values in a signal vary around the mean.
     threshold = mean_signal + 0.5 * std_signal  # Adjust multiplier as needed
 
-    # Find peaks that cross the threshold
-    peaks, _ = find_peaks(signal, height=threshold, distance=int(0.2 * fs))  # 200ms refractory
+    threshold_array = np.full_like(signal, threshold)  # ✅ always define this
 
-    plot_signal(signal, "Static Thresholded Signal", fs, peaks=peaks)
-    return peaks
-
+    if plot_only:
+        # Just plot with the threshold line, no peak detection
+        plot_signal(signal, "Static Thresholded Signal", fs, threshold=threshold_array)
+        return None
+    else:
+        # Normal detection mode
+        # Find peaks above threshold
+        peaks, _ = find_peaks(signal, height=threshold, distance=int(0.2 * fs))
+        plot_signal(signal, "Static Thresholded Signal", fs, peaks=peaks, threshold=threshold_array)
+        return peaks
 
 # 6. LMS-based Adaptive Thresholding (improved)
 def lms_threshold(signal, fs=200, mu=0.01, window_size=150):
@@ -106,7 +138,7 @@ def post_process(qrs_peaks, signal, fs=200):
 # Update the detect_qrs function to use the corrected thresholding
 def detect_qrs(ecg_signal, fs=200, use_lms=True):
     # 1. Bandpass filter
-    filtered = bandpass_filter(ecg_signal, fs)
+    filtered = bandpass_filter(ecg_signal)
 
     # 2. Derivative
     diff_signal = derivative(filtered)
@@ -117,20 +149,20 @@ def detect_qrs(ecg_signal, fs=200, use_lms=True):
     # 4. Moving window integration
     integrated = moving_window_integration(squared)
 
-    # 5. Thresholding (choose between LMS or Static)
+    # ONLY show static threshold for LMS case (for comparison)
     if use_lms:
-        # Use LMS-based adaptive thresholding
+        static_threshold(integrated, fs, plot_only=True)
+
+    # 5. Thresholding
+    if use_lms:
         detected_peaks = lms_threshold(integrated, fs)
         method = 'LMS'
     else:
-        # Use Static thresholding
         detected_peaks = static_threshold(integrated, fs)
         method = 'Static'
 
     print(f"Method: {method} Thresholding - Detected {len(detected_peaks)} peaks")
     return detected_peaks
-
-
 
 # Evaluation Function
 def evaluate_performance(true_peaks, detected_peaks, tolerance=0.1, fs=200):
@@ -305,21 +337,36 @@ def plot_group_delay(b, a, fs=200, title=""):
 if __name__ == "__main__":
 
     # Load MIT-BIH record
+    # This loads the ECG waveform data from record 215.
+    # Think of this as: “Give me the actual heartbeat signal for patient 101.”
     record = wfdb.rdrecord(r"C:\Users\yahya_k6rln48\OneDrive\Desktop\DSP_Project\mit-bih-arrhythmia-database-1.0.0\mit-bih-arrhythmia-database-1.0.0\215", sampto=3000)
+    # 'atr' tells wfdb that you're reading the annotation file.
+    # annotation.sample will give you the indices of each labeled beat.
+    # annotation.symbol gives the type of beat (e.g., normal, ventricular, etc.).
+    # This is the ground truth: used to check how accurate your QRS detection is.
     annotation = wfdb.rdann(r"C:\Users\yahya_k6rln48\OneDrive\Desktop\DSP_Project\mit-bih-arrhythmia-database-1.0.0\mit-bih-arrhythmia-database-1.0.0\215", 'atr', sampto=3000)
 
     ecg_signal = record.p_signal[:, 0]
     true_peaks = annotation.sample
+    plot_signal(ecg_signal, "Original ECG Signal", fs=200)
 
     # Detect QRS complexes using LMS-based adaptive thresholding
     detected_peaks_lms = detect_qrs(ecg_signal, use_lms=True)  # LMS Thresholding
 
     # Detect QRS complexes using Static thresholding
     detected_peaks_static = detect_qrs(ecg_signal, use_lms=False)  # Static Thresholding
+    # Step: Apply delay compensation
+    DELAY = 39  # total processing delay in samples
+
+    adjusted_peaks_lms = detected_peaks_lms - DELAY
+    adjusted_peaks_lms = adjusted_peaks_lms[adjusted_peaks_lms > 0]  # remove negative indices
+
+    adjusted_peaks_static = detected_peaks_static - DELAY
+    adjusted_peaks_static = adjusted_peaks_static[adjusted_peaks_static > 0]
 
     # Evaluate performance of LMS and Static thresholding
-    results_lms = evaluate_performance(true_peaks, detected_peaks_lms)
-    results_static = evaluate_performance(true_peaks, detected_peaks_static)
+    results_lms = evaluate_performance(true_peaks, adjusted_peaks_lms)
+    results_static = evaluate_performance(true_peaks, adjusted_peaks_static)
 
     # Print Results
     print("LMS Adaptive Thresholding Results:")
