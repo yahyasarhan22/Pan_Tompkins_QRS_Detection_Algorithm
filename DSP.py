@@ -1,303 +1,237 @@
 import wfdb
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.signal import butter, filtfilt, freqz, group_delay
+from scipy.signal import butter, filtfilt, find_peaks
 
 
-# Bandpass filter design
-def bandpass_filter(signal, lowcut=5.0, highcut=15.0, fs=200.0, order=4):
-    """
-    Applies a bandpass filter to the input signal.
-
-    Parameters:
-    - signal: Input ECG signal to be filtered.
-    - lowcut: Low cutoff frequency (in Hz).
-    - highcut: High cutoff frequency (in Hz).
-    - fs: Sampling frequency (in Hz).
-    - order: The order of the filter (higher order means sharper cutoff).
-
-    Returns:
-    - filtered_signal: The ECG signal after bandpass filtering.
-    """
-    nyquist = 0.5 * fs
-    low = lowcut / nyquist
-    high = highcut / nyquist
+# 1. Bandpass Filter (5-15 Hz)
+def bandpass_filter(signal, fs=200, lowcut=5.0, highcut=15.0, order=4):
+    nyq = 0.5 * fs
+    low = lowcut / nyq
+    high = highcut / nyq
     b, a = butter(order, [low, high], btype='band')
     filtered_signal = filtfilt(b, a, signal)
+    plot_signal(filtered_signal, "Bandpass Filtered Signal (5-15 Hz)", fs)
     return filtered_signal
 
 
-# Derivative Function
+# 2. Derivative Filter
 def derivative(signal):
-    """
-    Computes the derivative (slope) of the ECG signal using a simple 5-point derivative filter.
-
-    Parameters:
-    - signal: The input ECG signal.
-
-    Returns:
-    - derivative_signal: The derivative of the ECG signal.
-    """
-    derivative_signal = np.diff(signal, n=1)  # First-order difference
-    return derivative_signal
+    diff_signal = np.diff(signal)
+    # Pad to maintain length
+    diff_signal = np.concatenate(([diff_signal[0]], diff_signal))
+    plot_signal(diff_signal, "Derivative of Signal", len(signal))
+    return diff_signal
 
 
-# Squaring Function
+# 3. Squaring Function
 def squaring(signal):
-    """
-    Squares the ECG signal.
-
-    Parameters:
-    - signal: The input ECG signal.
-
-    Returns:
-    - squared_signal: The squared ECG signal.
-    """
-    squared_signal = signal ** 2  # Square each value in the signal
+    squared_signal = signal ** 2
+    plot_signal(squared_signal, "Squared Signal", len(signal))
     return squared_signal
 
 
-# Moving Window Integration Function
-def moving_window_integration(signal, window_size=150):
-    """
-    Performs moving window integration.
-
-    Parameters:
-    - signal: The input signal.
-    - window_size: The size of the moving window.
-
-    Returns:
-    - integrated_signal: The integrated signal.
-    """
+# 4. Moving Window Integration
+def moving_window_integration(signal, window_size=30):
     window = np.ones(window_size) / window_size
     integrated_signal = np.convolve(signal, window, mode='same')
+    plot_signal(integrated_signal, "Integrated Signal (Moving Window)", len(signal))
     return integrated_signal
 
 
-# Static Thresholding Function (Dual Thresholds)
-def static_threshold(signal, upper_factor=1.5, lower_factor=1.0):
-    """
-    Static thresholding with dual thresholds for QRS detection.
-
-    Parameters:
-    - signal: The input ECG signal.
-    - upper_factor: Factor for the upper threshold.
-    - lower_factor: Factor for the lower threshold.
-
-    Returns:
-    - thresholded_signal: The thresholded signal with detected QRS.
-    """
+# 5. Static Thresholding (modified to return peaks)
+def static_threshold(signal, fs=200):
     mean_signal = np.mean(signal)
-    upper_threshold = mean_signal * upper_factor
-    lower_threshold = mean_signal * lower_factor
-    thresholded_signal = np.where(signal > upper_threshold, 1, 0)
-    thresholded_signal = np.where(signal > lower_threshold, thresholded_signal, 0)
-    return thresholded_signal
+    std_signal = np.std(signal)
+    threshold = mean_signal + 0.5 * std_signal  # Adjust multiplier as needed
+
+    # Find peaks that cross the threshold
+    peaks, _ = find_peaks(signal, height=threshold, distance=int(0.2 * fs))  # 200ms refractory
+
+    plot_signal(signal, "Static Thresholded Signal", fs, peaks=peaks)
+    return peaks
 
 
-# LMS-based Adaptive Thresholding Function
-def lms_threshold(signal, mu=0.01, window_size=150):
+# 6. LMS-based Adaptive Thresholding (improved)
+def lms_threshold(signal, fs=200, mu=0.01, window_size=150):
     """
-    Applies LMS-based adaptive thresholding to the signal.
-
-    Parameters:
-    - signal: The input signal to detect QRS complexes.
-    - mu: Step size for the LMS algorithm.
-    - window_size: Size of the moving window for calculating the signal.
-
-    Returns:
-    - thresholded_signal: The output signal with dynamic thresholds.
+    Improved LMS-based adaptive thresholding that tracks signal envelope
+    and returns peak locations.
     """
     threshold = np.zeros_like(signal)
     error = np.zeros_like(signal)
 
-    # Initialize weight (threshold) with the mean of the first window_size samples
+    # Initialize with running average of first window
     weight = np.mean(signal[:window_size])
 
-    # Implement LMS update for each sample
-    for i in range(window_size, len(signal)):
-        # Compute the error as the difference between the signal and the threshold
-        error[i] = signal[i] - weight
-        # Update the threshold directly based on the error
-        weight += mu * error[i]
-        # Apply the threshold
-        threshold[i] = 1 if signal[i] > weight else 0
+    # Smoothing factor for threshold
+    alpha = 0.1
 
-    return threshold
+    for i in range(len(signal)):
+        # Update threshold more slowly than the error
+        if i >= window_size:
+            # Use max of recent window for better envelope tracking
+            window_max = np.max(signal[i - window_size:i])
+            error[i] = window_max - weight
+            weight += mu * error[i]
 
+        # Apply smoothing to threshold
+        threshold[i] = alpha * weight + (1 - alpha) * threshold[i - 1] if i > 0 else weight
 
-# Load ECG signal and annotations from MIT-BIH database
-record = wfdb.rdrecord( r"C:\Users\yahya_k6rln48\OneDrive\Desktop\DSP_Project\mit-bih-arrhythmia-database-1.0.0\mit-bih-arrhythmia-database-1.0.0\100")  # Replace with your actual path
-annotation = wfdb.rdann( r"C:\Users\yahya_k6rln48\OneDrive\Desktop\DSP_Project\mit-bih-arrhythmia-database-1.0.0\mit-bih-arrhythmia-database-1.0.0\100", 'atr')
-ecg_signal = record.p_signal
-time = np.arange(0, len(ecg_signal)) / record.fs  # Time in seconds
+    # Find peaks above the adaptive threshold
+    peaks, _ = find_peaks(signal, height=threshold, distance=int(0.2 * fs))
 
-# Apply bandpass filter (5-15 Hz) to the ECG signal
-filtered_ecg = bandpass_filter(ecg_signal[:, 0])
-
-# Apply derivative to the filtered ECG signal
-derivative_ecg = derivative(filtered_ecg)
-
-# Apply squaring to the derivative signal
-squared_signal = squaring(derivative_ecg)
-
-# Apply moving window integration to the squared signal
-integrated_signal = moving_window_integration(squared_signal)
-
-# Apply static thresholding
-thresholded_signal_static = static_threshold(integrated_signal)
-
-# Apply LMS thresholding
-thresholded_signal_lms = lms_threshold(integrated_signal)
-
-# --- Plotting Each Stage Separately ---
-
-# Plot Original ECG Signal (First 1000 samples)
-plt.figure(figsize=(10, 6))
-plt.plot(time[:1000], ecg_signal[:1000, 0], color='blue')
-plt.title('Original ECG Signal (First Lead)')
-plt.xlabel('Time (s)')
-plt.ylabel('Amplitude')
-plt.show()
-
-# Plot Filtered ECG Signal (First 1000 samples)
-plt.figure(figsize=(10, 6))
-plt.plot(time[:1000], filtered_ecg[:1000], color='red')
-plt.title('Filtered ECG Signal (5-15 Hz)')
-plt.xlabel('Time (s)')
-plt.ylabel('Amplitude')
-plt.show()
-
-# Plot Derivative of Filtered ECG Signal (First 1000 samples)
-plt.figure(figsize=(10, 6))
-plt.plot(time[1:1001], derivative_ecg[:1000], color='green')
-plt.title('Derivative of Filtered ECG Signal')
-plt.xlabel('Time (s)')
-plt.ylabel('Amplitude')
-plt.show()
-
-# Plot Squared Derivative Signal (First 1000 samples)
-plt.figure(figsize=(10, 6))
-plt.plot(time[1:1001], squared_signal[:1000], color='purple')
-plt.title('Squared Derivative of ECG Signal')
-plt.xlabel('Time (s)')
-plt.ylabel('Amplitude')
-plt.show()
-
-# Plot Integrated Signal (First 1000 samples)
-plt.figure(figsize=(10, 6))
-plt.plot(time[1:1001], integrated_signal[:1000], color='orange')
-plt.title('Integrated Signal (Moving Window)')
-plt.xlabel('Time (s)')
-plt.ylabel('Amplitude')
-plt.show()
-
-# Plot Static Thresholded Signal (First 1000 samples)
-plt.figure(figsize=(10, 6))
-plt.plot(time[1:1001], thresholded_signal_static[:1000], color='black')
-plt.title('Static Thresholded Signal (QRS Detection)')
-plt.xlabel('Time (s)')
-plt.ylabel('Amplitude')
-plt.show()
-
-# Plot LMS Thresholded Signal (First 1000 samples)
-plt.figure(figsize=(10, 6))
-plt.plot(time[1:1001], thresholded_signal_lms[:1000], color='green')
-plt.title('LMS Adaptive Thresholded Signal (QRS Detection)')
-plt.xlabel('Time (s)')
-plt.ylabel('Amplitude')
-plt.show()
+    plot_signal(signal, "LMS Adaptive Thresholded Signal", fs, peaks=peaks, threshold=threshold)
+    return peaks
 
 
-def evaluate_detection(true_annotations, detected_peaks, tolerance=10):
-    """
-    Evaluates the QRS detection performance using TP, FP, TN, FN, sensitivity, precision, and F1 score.
+# 7. Post-processing (to remove duplicates and apply refractory period)
+def post_process(qrs_peaks, signal, fs=200):
+    if len(qrs_peaks) < 2:
+        return qrs_peaks
 
-    Parameters:
-    - true_annotations: Actual QRS locations (indices).
-    - detected_peaks: Detected QRS locations (indices).
-    - tolerance: The tolerance in samples for matching detected peaks with true annotations (e.g., ±10 samples).
+    # Remove duplicates and sort
+    qrs_peaks = np.unique(qrs_peaks)
 
-    Returns:
-    - tp: True positives (detected and correct).
-    - fp: False positives (incorrect detections).
-    - tn: True negatives (correctly ignored positions).
-    - fn: False negatives (missed detections).
-    - sensitivity: True positive rate.
-    - precision: Positive predictive value.
-    - f1_score: Harmonic mean of sensitivity and precision.
-    """
-    tp = 0  # True positives
-    fp = 0  # False positives
-    fn = 0  # False negatives
+    # Apply refractory period
+    min_rr = int(0.2 * fs)  # 200ms
+    filtered_peaks = [qrs_peaks[0]]
 
-    # Sort the true annotations and detected peaks for efficient matching
-    true_annotations = sorted(true_annotations)
-    detected_peaks = sorted(detected_peaks)
+    for i in range(1, len(qrs_peaks)):
+        if qrs_peaks[i] - filtered_peaks[-1] >= min_rr:
+            filtered_peaks.append(qrs_peaks[i])
 
-    # Pointers for true annotations and detected peaks
-    true_idx = 0
-    detected_idx = 0
+    return np.array(filtered_peaks)
 
-    # Match detected peaks to true annotations within tolerance window
-    while true_idx < len(true_annotations) and detected_idx < len(detected_peaks):
-        true_peak = true_annotations[true_idx]
-        detected_peak = detected_peaks[detected_idx]
 
-        # If the detected peak is within the tolerance range of the true annotation
-        if abs(detected_peak - true_peak) <= tolerance:
-            tp += 1
-            true_idx += 1
-            detected_idx += 1
-        # If detected peak is too early, it's a false positive
-        elif detected_peak < true_peak - tolerance:
-            fp += 1
-            detected_idx += 1
-        # If true annotation is too early, it's a false negative
-        else:
+# Update the detect_qrs function to use the corrected thresholding
+def detect_qrs(ecg_signal, fs=200, use_lms=True):
+    # 1. Bandpass filter
+    filtered = bandpass_filter(ecg_signal, fs)
+
+    # 2. Derivative
+    diff_signal = derivative(filtered)
+
+    # 3. Squaring
+    squared = squaring(diff_signal)
+
+    # 4. Moving window integration
+    integrated = moving_window_integration(squared)
+
+    # 5. Thresholding (choose between LMS or Static)
+    if use_lms:
+        # Use LMS-based adaptive thresholding
+        detected_peaks = lms_threshold(integrated, fs)
+        method = 'LMS'
+    else:
+        # Use Static thresholding
+        detected_peaks = static_threshold(integrated, fs)
+        method = 'Static'
+
+    print(f"Method: {method} Thresholding - Detected {len(detected_peaks)} peaks")
+    return detected_peaks
+
+
+
+# Evaluation Function
+def evaluate_performance(true_peaks, detected_peaks, tolerance=0.1, fs=200):
+    tol_samples = int(tolerance * fs)
+    tp = 0
+    fp = 0
+    fn = 0
+
+    matched_true = []
+    matched_detected = []
+
+    for true_p in true_peaks:
+        found = False
+        for det_p in detected_peaks:
+            if abs(det_p - true_p) <= tol_samples:
+                tp += 1
+                matched_true.append(true_p)
+                matched_detected.append(det_p)
+                found = True
+                break
+        if not found:
             fn += 1
-            true_idx += 1
 
-    # Handle remaining true annotations as false negatives
-    fn += len(true_annotations) - true_idx
-    # Handle remaining detected peaks as false positives
-    fp += len(detected_peaks) - detected_idx
+    fp = len(detected_peaks) - len(matched_detected)
 
-    # True negatives are positions correctly ignored by the algorithm,
-    # so we are not explicitly calculating TN in this case. It can be inferred
-    # from the total number of samples, but it's not needed in typical QRS evals.
-    tn = 0
-
-    # Sensitivity, Precision, F1 Score
     sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-    f1_score = 2 * (precision * sensitivity) / (precision + sensitivity) if (precision + sensitivity) > 0 else 0
+    f1 = 2 * (sensitivity * precision) / (sensitivity + precision) if (sensitivity + precision) > 0 else 0
 
-    return tp, fp, tn, fn, sensitivity, precision, f1_score
+    return {
+        'TP': tp,
+        'FP': fp,
+        'FN': fn,
+        'Sensitivity': sensitivity,
+        'Precision': precision,
+        'F1': f1
+    }
 
 
-# Assuming you have the true annotation peak indices (annotations from MIT-BIH)
-true_annotations = annotation.sample  # Annotation peaks
+# Updated plotting function
+def plot_signal(signal, title, fs, peaks=None, threshold=None):
+    plt.figure(figsize=(10, 6))
+    plt.plot(np.arange(0, len(signal)) / fs, signal, label='Signal')
 
-# Detect QRS using static and LMS thresholding
-static_peaks = np.where(thresholded_signal_static == 1)[0]
-lms_peaks = np.where(thresholded_signal_lms == 1)[0]
+    if threshold is not None:
+        plt.plot(np.arange(0, len(threshold)) / fs, threshold, 'r-', label='Threshold', alpha=0.7)
 
-# Evaluate the performance for static thresholding with a tolerance of 10 samples
-tp_static, fp_static, tn_static, fn_static, sensitivity_static, precision_static, f1_static = evaluate_detection(true_annotations, static_peaks, tolerance=10)
+    if peaks is not None:
+        plt.plot(peaks / fs, signal[peaks], 'rx', label='Detected Peaks')
 
-# Evaluate the performance for LMS adaptive thresholding with a tolerance of 10 samples
-tp_lms, fp_lms, tn_lms, fn_lms, sensitivity_lms, precision_lms, f1_lms = evaluate_detection(true_annotations, lms_peaks, tolerance=10)
+    plt.title(title)
+    plt.xlabel('Time (s)')
+    plt.ylabel('Amplitude')
+    plt.legend()
+    plt.show()
 
-# Print Evaluation Results for Static Thresholding
-print("Static Thresholding Performance:")
-print(f"TP: {tp_static}, FP: {fp_static}, TN: {tn_static}, FN: {fn_static}")
-print(f"Sensitivity: {sensitivity_static:.4f}, Precision: {precision_static:.4f}, F1 Score: {f1_static:.4f}")
 
-# Print Evaluation Results for LMS Adaptive Thresholding
-print("\nLMS Adaptive Thresholding Performance:")
-print(f"TP: {tp_lms}, FP: {fp_lms}, TN: {tn_lms}, FN: {fn_lms}")
-print(f"Sensitivity: {sensitivity_lms:.4f}, Precision: {precision_lms:.4f}, F1 Score: {f1_lms:.4f}")
+# Example Usage
+if __name__ == "__main__":
+    # Load MIT-BIH record
+    record = wfdb.rdrecord(r"C:\Users\yahya_k6rln48\OneDrive\Desktop\DSP_Project\mit-bih-arrhythmia-database-1.0.0\mit-bih-arrhythmia-database-1.0.0\215", sampto=3000)
+    annotation = wfdb.rdann(r"C:\Users\yahya_k6rln48\OneDrive\Desktop\DSP_Project\mit-bih-arrhythmia-database-1.0.0\mit-bih-arrhythmia-database-1.0.0\215", 'atr', sampto=3000)
+
+    ecg_signal = record.p_signal[:, 0]
+    true_peaks = annotation.sample
+
+    # Detect QRS complexes using LMS-based adaptive thresholding
+    detected_peaks_lms = detect_qrs(ecg_signal, use_lms=True)  # LMS Thresholding
+
+    # Detect QRS complexes using Static thresholding
+    detected_peaks_static = detect_qrs(ecg_signal, use_lms=False)  # Static Thresholding
+
+    # Evaluate performance of LMS and Static thresholding
+    results_lms = evaluate_performance(true_peaks, detected_peaks_lms)
+    results_static = evaluate_performance(true_peaks, detected_peaks_static)
+
+    # Print Results
+    print("LMS Adaptive Thresholding Results:")
+    print(f"TP: {results_lms['TP']}, FP: {results_lms['FP']}, FN: {results_lms['FN']}")
+    print(f"Sensitivity: {results_lms['Sensitivity']:.4f}")
+    print(f"Precision: {results_lms['Precision']:.4f}")
+    print(f"F1 Score: {results_lms['F1']:.4f}")
+
+    print("\nStatic Thresholding Results:")
+    print(f"TP: {results_static['TP']}, FP: {results_static['FP']}, FN: {results_static['FN']}")
+    print(f"Sensitivity: {results_static['Sensitivity']:.4f}")
+    print(f"Precision: {results_static['Precision']:.4f}")
+    print(f"F1 Score: {results_static['F1']:.4f}")
+
+    # Plot results
+    plt.figure(figsize=(12, 6))
+    plt.plot(ecg_signal)
+    plt.plot(true_peaks, ecg_signal[true_peaks], 'go', label='True QRS')
+    plt.plot(np.where(detected_peaks_lms == 1)[0], ecg_signal[np.where(detected_peaks_lms == 1)[0]], 'rx', label='Detected QRS (LMS)')
+    plt.plot(np.where(detected_peaks_static == 1)[0], ecg_signal[np.where(detected_peaks_static == 1)[0]], 'bx', label='Detected QRS (Static)')
+    plt.legend()
+    plt.title('QRS Detection Results')
+    plt.show()
+
+
 
 
 
