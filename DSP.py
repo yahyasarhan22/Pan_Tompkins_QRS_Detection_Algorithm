@@ -1,9 +1,8 @@
 import wfdb
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.signal import butter, filtfilt, find_peaks
-
-
+from scipy.signal import butter, filtfilt, find_peaks,freqz,tf2zpk,lfilter,group_delay
+import  warnings
 # 1. Bandpass Filter (5-15 Hz)
 def bandpass_filter(signal, fs=200, lowcut=5.0, highcut=15.0, order=4):
     nyq = 0.5 * fs
@@ -187,10 +186,124 @@ def plot_signal(signal, title, fs, peaks=None, threshold=None):
     plt.ylabel('Amplitude')
     plt.legend()
     plt.show()
+#################
+
+# Suppress specific warnings we expect and understand
+warnings.filterwarnings('ignore', category=RuntimeWarning)
+warnings.filterwarnings('ignore', category=UserWarning)
 
 
+# 1. Bandpass Filter Analysis (as per original paper)
+def original_bandpass_filters(fs=200):
+    """Implement the exact filters from the Pan-Tompkins paper"""
+    # Low-pass filter (cutoff ~11 Hz)
+    # H(z) = (1 - z^-6)^2 / (1 - z^-1)^2
+    b_low = np.array([1, 0, 0, 0, 0, 0, -2, 0, 0, 0, 0, 0, 1])
+    a_low = np.array([1, -2, 1])
+
+    # High-pass filter (cutoff ~5 Hz)
+    # H(z) = (-1 + 32z^-16 + z^-32) / (1 + z^-1)
+    b_high = np.zeros(33)
+    b_high[0] = -1
+    b_high[16] = 32
+    b_high[32] = 1
+    a_high = np.array([1, 1])
+
+    return b_low, a_low, b_high, a_high
+
+
+# 2. Derivative Filter (as per original paper)
+def original_derivative_filter(fs=200):
+    """5-point derivative from the paper"""
+    # H(z) = (1/8T)(-z^-2 - 2z^-1 + 2z^1 + z^2)
+    b = np.array([-1, -2, 0, 2, 1]) / (8 * 1 / fs)  # T = 1/fs
+    a = np.array([1])
+    return b, a
+
+
+# 3. Moving Window Integration (as per original paper)
+def original_integrator(window_size=30):
+    """Moving window integrator from the paper"""
+    b = np.ones(window_size) / window_size
+    a = np.array([1])
+    return b, a
+
+
+# Function to plot frequency response with safe dB calculation
+def plot_frequency_response(b, a, fs=200, title=""):
+    w, h = freqz(b, a, worN=2000)
+    plt.figure(figsize=(12, 6))
+
+    # Magnitude Response (with safe dB calculation)
+    magnitude = np.abs(h)
+    # Replace zeros with small value to avoid log10(0)
+    magnitude[magnitude == 0] = np.finfo(float).eps
+    dB = 20 * np.log10(magnitude)
+
+    plt.subplot(2, 1, 1)
+    plt.plot(w * fs / (2 * np.pi), dB, 'b')
+    plt.title(f'Magnitude Response for {title}')
+    plt.xlabel('Frequency [Hz]')
+    plt.ylabel('Magnitude [dB]')
+    plt.grid(True)
+
+    # Phase Response
+    plt.subplot(2, 1, 2)
+    plt.plot(w * fs / (2 * np.pi), np.angle(h), 'b')
+    plt.title(f'Phase Response for {title}')
+    plt.xlabel('Frequency [Hz]')
+    plt.ylabel('Phase [radians]')
+    plt.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+
+# Function to plot pole-zero plot
+def plot_pole_zero(b, a, title=""):
+    z, p, k = tf2zpk(b, a)
+    plt.figure(figsize=(6, 6))
+
+    # Unit circle
+    unit_circle = plt.Circle((0, 0), 1, fill=False, color='gray', linestyle='--')
+    plt.gca().add_patch(unit_circle)
+
+    # Plot poles and zeros
+    plt.scatter(np.real(z), np.imag(z), marker='o', color='b', label='Zeros')
+    plt.scatter(np.real(p), np.imag(p), marker='x', color='r', label='Poles')
+
+    plt.title(f'Pole-Zero Plot for {title}')
+    plt.xlabel('Real')
+    plt.ylabel('Imaginary')
+    plt.legend()
+    plt.grid(True)
+    plt.axis('equal')
+    plt.xlim((-1.5, 1.5))
+    plt.ylim((-1.5, 1.5))
+    plt.show()
+
+
+# Function to plot group delay with safe handling
+def plot_group_delay(b, a, fs=200, title=""):
+    try:
+        w, gd = group_delay((b, a), w=2000)
+        # Replace any inf/nan values with 0
+        gd = np.nan_to_num(gd)
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(w * fs / (2 * np.pi), gd, 'b')
+        plt.title(f'Group Delay for {title}')
+        plt.xlabel('Frequency [Hz]')
+        plt.ylabel('Group Delay [samples]')
+        plt.grid(True)
+        plt.show()
+    except Exception as e:
+        print(f"Could not calculate group delay for {title}: {str(e)}")
+
+###########
 # Example Usage
 if __name__ == "__main__":
+
     # Load MIT-BIH record
     record = wfdb.rdrecord(r"C:\Users\yahya_k6rln48\OneDrive\Desktop\DSP_Project\mit-bih-arrhythmia-database-1.0.0\mit-bih-arrhythmia-database-1.0.0\215", sampto=3000)
     annotation = wfdb.rdann(r"C:\Users\yahya_k6rln48\OneDrive\Desktop\DSP_Project\mit-bih-arrhythmia-database-1.0.0\mit-bih-arrhythmia-database-1.0.0\215", 'atr', sampto=3000)
@@ -230,143 +343,54 @@ if __name__ == "__main__":
     plt.legend()
     plt.title('QRS Detection Results')
     plt.show()
+    ########################################
+    # Sampling frequency from the paper
+    fs = 200
+    # 1. Analyze Bandpass Filter (cascaded high-pass and low-pass)
+    b_low, a_low, b_high, a_high = original_bandpass_filters(fs)
 
+    # Low-pass filter analysis
+    print("\nAnalyzing Low-pass Filter (cutoff ~11 Hz)")
+    plot_frequency_response(b_low, a_low, fs, "Low-pass Filter")
+    plot_pole_zero(b_low, a_low, "Low-pass Filter")
+    plot_group_delay(b_low, a_low, fs, "Low-pass Filter")
 
+    # High-pass filter analysis
+    print("\nAnalyzing High-pass Filter (cutoff ~5 Hz)")
+    plot_frequency_response(b_high, a_high, fs, "High-pass Filter")
+    plot_pole_zero(b_high, a_high, "High-pass Filter")
+    plot_group_delay(b_high, a_high, fs, "High-pass Filter")
 
+    # Combined bandpass response
+    print("\nAnalyzing Combined Bandpass Filter")
+    # Filter the signal through low-pass then high-pass
+    w, h_low = freqz(b_low, a_low, worN=2000)
+    _, h_high = freqz(b_high, a_high, worN=2000)
+    h_combined = h_low * h_high
 
+    # Safe dB calculation for combined response
+    magnitude = np.abs(h_combined)
+    magnitude[magnitude == 0] = np.finfo(float).eps
+    dB = 20 * np.log10(magnitude)
 
+    plt.figure(figsize=(12, 6))
+    plt.plot(w * fs / (2 * np.pi), dB, 'b')
+    plt.title('Magnitude Response for Combined Bandpass Filter')
+    plt.xlabel('Frequency [Hz]')
+    plt.ylabel('Magnitude [dB]')
+    plt.grid(True)
+    plt.show()
 
+    # 2. Analyze Derivative Filter
+    b_deriv, a_deriv = original_derivative_filter(fs)
+    print("\nAnalyzing Derivative Filter")
+    plot_frequency_response(b_deriv, a_deriv, fs, "Derivative Filter")
+    plot_pole_zero(b_deriv, a_deriv, "Derivative Filter")
+    plot_group_delay(b_deriv, a_deriv, fs, "Derivative Filter")
 
-# # --- Filter Analysis: Magnitude & Phase Response, Pole-Zero Plot, Group Delay ---
-#
-# # Bandpass filter design for analysis
-# def bandpass_filter_design(lowcut=5.0, highcut=15.0, fs=200.0, order=4):
-#     nyquist = 0.5 * fs
-#     low = lowcut / nyquist
-#     high = highcut / nyquist
-#     b, a = butter(order, [low, high], btype='band')
-#     return b, a
-#
-#
-# # Frequency response (Magnitude and Phase)
-# def plot_frequency_response(b, a, fs=200.0, title=""):
-#     w, h = freqz(b, a, worN=2000)
-#     plt.figure(figsize=(12, 6))
-#
-#     # Magnitude Response
-#     plt.subplot(2, 1, 1)
-#     plt.plot(w * fs / (2 * np.pi), abs(h), 'b')
-#     plt.title(f'Magnitude Response for {title}')
-#     plt.xlabel('Frequency [Hz]')
-#     plt.ylabel('Amplitude')
-#
-#     # Phase Response
-#     plt.subplot(2, 1, 2)
-#     plt.plot(w * fs / (2 * np.pi), np.angle(h), 'b')
-#     plt.title(f'Phase Response for {title}')
-#     plt.xlabel('Frequency [Hz]')
-#     plt.ylabel('Phase [radians]')
-#
-#     plt.tight_layout()
-#     plt.show()
-#
-#
-# # Plot Pole-Zero Plot with Unit Circle
-# def plot_pole_zero(b, a, title=""):
-#     z, p, k = tf2zpk(b, a)
-#     plt.figure(figsize=(6, 6))
-#
-#     # Plot unit circle
-#     circle = plt.Circle((0, 0), 1, color='gray', fill=False, linestyle='--')
-#     plt.gca().add_artist(circle)
-#
-#     # Plot poles and zeros
-#     plt.scatter(np.real(p), np.imag(p), label='Poles', color='red')
-#     plt.scatter(np.real(z), np.imag(z), label='Zeros', color='blue')
-#     plt.title(f'Pole-Zero Plot for {title}')
-#     plt.xlabel('Real')
-#     plt.ylabel('Imaginary')
-#     plt.legend()
-#     plt.grid(True)
-#     plt.show()
-#
-#
-# # Group Delay with Safe Handling by Excluding Low Frequencies
-# def plot_group_delay(b, a, fs=200.0, title=""):
-#     # Calculate group delay for the filter
-#     w, gd = group_delay((b, a))
-#
-#     # Mask to avoid singularities at low frequencies (e.g., exclude the range 0 to 0.05 Hz)
-#     mask = (w > 0.05)  # Adjust this threshold as necessary
-#     w_filtered = w[mask]
-#     gd_filtered = gd[mask]
-#
-#     # Handle the case when the group delay is singular at certain frequencies
-#     gd_filtered = np.nan_to_num(gd_filtered)  # Replace NaN values with 0 (avoid issues with singularities)
-#
-#     # Plotting group delay for valid frequencies only
-#     plt.figure(figsize=(6, 6))
-#     plt.plot(w_filtered * fs / (2 * np.pi), gd_filtered, 'b')
-#     plt.title(f'Group Delay for {title}')
-#     plt.xlabel('Frequency [Hz]')
-#     plt.ylabel('Group Delay [samples]')
-#     plt.grid(True)
-#     plt.show()
-#
-#
-# # --- Derivative Filter Design ---
-# def derivative_filter_design():
-#     # Approximate derivative using a 5-point filter
-#     b = np.array([-1, 0, 0, 0, 1])  # Coefficients for the 5-point derivative filter
-#     a = np.array([1, 0, 0, 0, 0])   # Denominator for the derivative filter (simple FIR)
-#     return b, a
-#
-#
-# # --- Main Execution for Filter Analysis ---
-#
-# # Bandpass Filter Design for analysis
-# b, a = bandpass_filter_design()
-#
-# # Plot Frequency Response for Bandpass Filter
-# plot_frequency_response(b, a, title="Bandpass Filter (5-15 Hz)")
-#
-# # Plot Pole-Zero Plot for Bandpass Filter
-# plot_pole_zero(b, a, title="Bandpass Filter (5-15 Hz)")
-#
-# # Plot Group Delay for Bandpass Filter
-# plot_group_delay(b, a, title="Bandpass Filter (5-15 Hz)")
-#
-#
-# # Moving Window Integration Filter Design for analysis
-# def moving_window_integration_filter(window_size=150):
-#     b = np.ones(window_size) / window_size
-#     a = np.array([1])
-#     return b, a
-#
-#
-# # Moving Window Integration filter coefficients for analysis
-# b_mwi, a_mwi = moving_window_integration_filter()
-#
-# # Plot Frequency Response for Moving Window Integration Filter
-# plot_frequency_response(b_mwi, a_mwi, title="Moving Window Integration Filter")
-#
-# # Plot Pole-Zero Plot for Moving Window Integration Filter
-# plot_pole_zero(b_mwi, a_mwi, title="Moving Window Integration Filter")
-#
-# # Plot Group Delay for Moving Window Integration Filter
-# plot_group_delay(b_mwi, a_mwi, title="Moving Window Integration Filter")
-#
-#
-# # --- Derivative Filter Analysis ---
-#
-# # Derivative Filter Design for analysis
-# b_deriv, a_deriv = derivative_filter_design()
-#
-# # Plot Frequency Response for Derivative Filter
-# plot_frequency_response(b_deriv, a_deriv, title="Derivative Filter")
-#
-# # Plot Pole-Zero Plot for Derivative Filter
-# plot_pole_zero(b_deriv, a_deriv, title="Derivative Filter")
-#
-# # Plot Group Delay for Derivative Filter
-# plot_group_delay(b_deriv, a_deriv, title="Derivative Filter")
+    # 3. Analyze Moving Window Integrator
+    b_integ, a_integ = original_integrator()
+    print("\nAnalyzing Moving Window Integrator")
+    plot_frequency_response(b_integ, a_integ, fs, "Moving Window Integrator")
+    plot_pole_zero(b_integ, a_integ, "Moving Window Integrator")
+    plot_group_delay(b_integ, a_integ, fs, "Moving Window Integrator")
