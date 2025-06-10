@@ -1,3 +1,4 @@
+# Yahya Sarhan                                Fadi Bassous                                                 Maysa Khanfar
 import wfdb
 import numpy as np
 import matplotlib.pyplot as plt
@@ -22,7 +23,7 @@ def bandpass_filter(signal):
     for n in range(32, len(lp)):
         hp[n] = hp[n-1] - lp[n] / 32 + lp[n-16] - lp[n-17] + lp[n-32] / 32
 
-    plot_signal(hp, "Bandpass Filtered Signal", fs=200)
+    plot_signal(hp, "Bandpass Filtered Signal", fs=200, time_window_sec=10)
     return hp
 
 
@@ -44,7 +45,7 @@ def derivative(signal, fs=200):
 # 3. Squaring Function
 def squaring(signal):
     squared_signal = signal ** 2
-    plot_signal(squared_signal, "Squared Signal", len(signal))
+    plot_signal(squared_signal, "Squared Signal", len(signal), time_window_sec=5)
     return squared_signal
 
 
@@ -59,7 +60,7 @@ def moving_window_integration(signal, window_size=30):
         mode='same' ensures the output signal is the same length as the input.
     """
     integrated_signal = np.convolve(signal, window, mode='same')
-    plot_signal(integrated_signal, "Integrated Signal (Moving Window)", len(signal))
+    plot_signal(integrated_signal, "Integrated Signal (Moving Window)", len(signal), time_window_sec=10)
     return integrated_signal
 
 
@@ -74,13 +75,13 @@ def static_threshold(signal, fs=200, plot_only=False):
 
     if plot_only:
         # Just plot with the threshold line, no peak detection
-        plot_signal(signal, "Static Thresholded Signal", fs, threshold=threshold_array)
+        plot_signal(signal, "Static Thresholded Signal (preview only)", fs, threshold=threshold_array, time_window_sec=10)
         return None
     else:
         # Normal detection mode
         # Find peaks above threshold
         peaks, _ = find_peaks(signal, height=threshold, distance=int(0.2 * fs))
-        plot_signal(signal, "Static Thresholded Signal", fs, peaks=peaks, threshold=threshold_array)
+        plot_signal(signal, "Static Thresholded Signal (with detected peaks)", fs, peaks=peaks, threshold=threshold_array, time_window_sec=10)
         return peaks
 
 # 6. LMS-based Adaptive Thresholding (improved)
@@ -112,7 +113,7 @@ def lms_threshold(signal, fs=200, mu=0.01, window_size=150):
     # Find peaks above the adaptive threshold
     peaks, _ = find_peaks(signal, height=threshold, distance=int(0.2 * fs))
 
-    plot_signal(signal, "LMS Adaptive Thresholded Signal", fs, peaks=peaks, threshold=threshold)
+    plot_signal(signal, "LMS Adaptive Thresholded Signal", fs, peaks=peaks, threshold=threshold, time_window_sec=10)
     return peaks
 
 
@@ -203,21 +204,54 @@ def evaluate_performance(true_peaks, detected_peaks, tolerance=0.1, fs=200):
 
 
 # Updated plotting function
-def plot_signal(signal, title, fs, peaks=None, threshold=None):
-    plt.figure(figsize=(10, 6))
-    plt.plot(np.arange(0, len(signal)) / fs, signal, label='Signal')
+def plot_signal(signal, title, fs, peaks=None, threshold=None, time_window_sec=10, normalize=False, smooth=True):
+    plt.figure(figsize=(12, 5))
 
+    # Generate time axis
+    time = np.arange(len(signal)) / fs
+
+    # Determine number of samples to display
+    max_samples = int(time_window_sec * fs)
+    signal = signal[:max_samples]
+    time = time[:max_samples]
     if threshold is not None:
-        plt.plot(np.arange(0, len(threshold)) / fs, threshold, 'r-', label='Threshold', alpha=0.7)
-
+        threshold = threshold[:max_samples]
     if peaks is not None:
-        plt.plot(peaks / fs, signal[peaks], 'rx', label='Detected Peaks')
+        peaks = peaks[peaks < max_samples]
+
+    # Optional smoothing for visualization
+    if smooth:
+        window_size = 5  # small window just for visualization
+        kernel = np.ones(window_size) / window_size
+        signal = np.convolve(signal, kernel, mode='same')
+        if threshold is not None:
+            threshold = np.convolve(threshold, kernel, mode='same')
+
+    # Optional normalization
+    if normalize:
+        min_val = np.min(signal)
+        max_val = np.max(signal)
+        signal = (signal - min_val) / (max_val - min_val)
+        if threshold is not None:
+            threshold = (threshold - min_val) / (max_val - min_val)
+
+    # Plot
+    plt.plot(time, signal, label='Signal', linewidth=1.2, alpha=0.9)
+    if threshold is not None:
+        plt.plot(time, threshold, 'r--', label='Threshold', linewidth=1)
+    if peaks is not None and len(peaks) > 0:
+        plt.plot(peaks / fs, signal[peaks], 'rx', label='Detected Peaks', markersize=6)
 
     plt.title(title)
-    plt.xlabel('Time (s)')
-    plt.ylabel('Amplitude')
+    plt.xlabel("Time (s)")
+    plt.ylabel("Amplitude")
+    plt.grid(True, linestyle='--', alpha=0.4)
     plt.legend()
+    plt.tight_layout()
     plt.show()
+
+
+
 #################
 
 # Suppress specific warnings we expect and understand
@@ -336,91 +370,88 @@ def plot_group_delay(b, a, fs=200, title=""):
 # Example Usage
 if __name__ == "__main__":
 
-    # Load MIT-BIH record
-    # This loads the ECG waveform data from record 215.
-    # Think of this as: “Give me the actual heartbeat signal for patient 101.”
-    record = wfdb.rdrecord(r"C:\Users\yahya_k6rln48\OneDrive\Desktop\DSP_Project\mit-bih-arrhythmia-database-1.0.0\mit-bih-arrhythmia-database-1.0.0\100", sampto=3000)
-    # 'atr' tells wfdb that you're reading the annotation file.
-    # annotation.sample will give you the indices of each labeled beat.
-    # annotation.symbol gives the type of beat (e.g., normal, ventricular, etc.).
-    # This is the ground truth: used to check how accurate your QRS detection is.
-    annotation = wfdb.rdann(r"C:\Users\yahya_k6rln48\OneDrive\Desktop\DSP_Project\mit-bih-arrhythmia-database-1.0.0\mit-bih-arrhythmia-database-1.0.0\100", 'atr', sampto=3000)
+    # === Helper Function to Load ECG Record ===
+    def load_ecg_record(record_number, sampto=None):
+        base_path = r"C:\Users\yahya_k6rln48\OneDrive\Desktop\DSP_Project\mit-bih-arrhythmia-database-1.0.0\mit-bih-arrhythmia-database-1.0.0"
+        record = wfdb.rdrecord(f"{base_path}\\{record_number}", sampto=sampto)
+        annotation = wfdb.rdann(f"{base_path}\\{record_number}", 'atr', sampto=sampto)
+        return record, annotation
 
-    ecg_signal = record.p_signal[:, 0]
-    true_peaks = annotation.sample
-    plot_signal(ecg_signal, "Original ECG Signal", fs=200)
+    DELAY = 39  # Processing delay
 
-    # Detect QRS complexes using LMS-based adaptive thresholding
-    detected_peaks_lms = detect_qrs(ecg_signal, use_lms=True)  # LMS Thresholding
 
-    # Detect QRS complexes using Static thresholding
-    detected_peaks_static = detect_qrs(ecg_signal, use_lms=False)  # Static Thresholding
-    # Step: Apply delay compensation
-    DELAY = 39  # total processing delay in samples
+    def run_analysis(record_number, label, sampto=11000):
+        record, annotation = load_ecg_record(record_number, sampto=sampto)
+        ecg_signal = record.p_signal[:, 0]
+        fs = 200
+        DELAY = 39
 
-    adjusted_peaks_lms = detected_peaks_lms - DELAY
-    adjusted_peaks_lms = adjusted_peaks_lms[adjusted_peaks_lms > 0]  # remove negative indices
+        # Delay-corrected true peaks
+        true_peaks = annotation.sample - DELAY
+        true_peaks = true_peaks[(true_peaks >= 0) & (true_peaks < len(ecg_signal))]
 
-    adjusted_peaks_static = detected_peaks_static - DELAY
-    adjusted_peaks_static = adjusted_peaks_static[adjusted_peaks_static > 0]
+        # Plot original signal
+        plot_signal(ecg_signal, f"{label} - Original ECG Signal", fs)
 
-    # Evaluate performance of LMS and Static thresholding
-    results_lms = evaluate_performance(true_peaks, adjusted_peaks_lms)
-    results_static = evaluate_performance(true_peaks, adjusted_peaks_static)
+        # Run both detectors
+        peaks_lms = detect_qrs(ecg_signal, fs=fs, use_lms=True)
+        peaks_static = detect_qrs(ecg_signal, fs=fs, use_lms=False)
 
-    # Print Results
-    print("LMS Adaptive Thresholding Results:")
-    print(f"TP: {results_lms['TP']}, FP: {results_lms['FP']}, FN: {results_lms['FN']}")
-    print(f"Sensitivity: {results_lms['Sensitivity']:.4f}")
-    print(f"Precision: {results_lms['Precision']:.4f}")
-    print(f"F1 Score: {results_lms['F1']:.4f}")
+        # Delay-correct detected peaks
+        peaks_lms = peaks_lms - DELAY
+        peaks_static = peaks_static - DELAY
 
-    print("\nStatic Thresholding Results:")
-    print(f"TP: {results_static['TP']}, FP: {results_static['FP']}, FN: {results_static['FN']}")
-    print(f"Sensitivity: {results_static['Sensitivity']:.4f}")
-    print(f"Precision: {results_static['Precision']:.4f}")
-    print(f"F1 Score: {results_static['F1']:.4f}")
+        peaks_lms = peaks_lms[(peaks_lms >= 0) & (peaks_lms < len(ecg_signal))]
+        peaks_static = peaks_static[(peaks_static >= 0) & (peaks_static < len(ecg_signal))]
 
-    # Plot results
-    plt.figure(figsize=(12, 6))
-    plt.plot(ecg_signal)
-    plt.plot(true_peaks, ecg_signal[true_peaks], 'go', label='True QRS')
-    plt.plot(np.where(detected_peaks_lms == 1)[0], ecg_signal[np.where(detected_peaks_lms == 1)[0]], 'rx', label='Detected QRS (LMS)')
-    plt.plot(np.where(detected_peaks_static == 1)[0], ecg_signal[np.where(detected_peaks_static == 1)[0]], 'bx', label='Detected QRS (Static)')
-    plt.legend()
-    plt.title('QRS Detection Results')
-    plt.show()
+        # Evaluate performance
+        eval_lms = evaluate_performance(true_peaks, peaks_lms, fs=fs)
+        eval_static = evaluate_performance(true_peaks, peaks_static, fs=fs)
+
+        print(f"\n====== {label.upper()} ECG (Record {record_number}) ======")
+        print("Static Thresholding:", eval_static)
+        print("LMS Thresholding:   ", eval_lms)
+
+        # Final Plot
+        plt.figure(figsize=(12, 6))
+        plt.plot(ecg_signal, label="ECG Signal")
+        plt.plot(true_peaks, ecg_signal[true_peaks], 'go', label='True QRS')
+        plt.plot(peaks_lms, ecg_signal[peaks_lms], 'rx', label='Detected QRS (LMS)')
+        plt.plot(peaks_static, ecg_signal[peaks_static], 'bx', label='Detected QRS (Static)')
+        plt.title(f'{label} ECG - QRS Detection (LMS vs Static)')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+
+
+    # === Run for Clean and Noisy signals ===
+    run_analysis("100", "Clean", sampto=None)
+    run_analysis("215", "Noisy", sampto=None)
+
     ########################################
     # Sampling frequency from the paper
     fs = 200
-    # 1. Analyze Bandpass Filter (cascaded high-pass and low-pass)
     b_low, a_low, b_high, a_high = original_bandpass_filters(fs)
 
-    # Low-pass filter analysis
     print("\nAnalyzing Low-pass Filter (cutoff ~11 Hz)")
     plot_frequency_response(b_low, a_low, fs, "Low-pass Filter")
     plot_pole_zero(b_low, a_low, "Low-pass Filter")
     plot_group_delay(b_low, a_low, fs, "Low-pass Filter")
 
-    # High-pass filter analysis
     print("\nAnalyzing High-pass Filter (cutoff ~5 Hz)")
     plot_frequency_response(b_high, a_high, fs, "High-pass Filter")
     plot_pole_zero(b_high, a_high, "High-pass Filter")
     plot_group_delay(b_high, a_high, fs, "High-pass Filter")
 
-    # Combined bandpass response
     print("\nAnalyzing Combined Bandpass Filter")
-    # Filter the signal through low-pass then high-pass
     w, h_low = freqz(b_low, a_low, worN=2000)
     _, h_high = freqz(b_high, a_high, worN=2000)
     h_combined = h_low * h_high
-
-    # Safe dB calculation for combined response
     magnitude = np.abs(h_combined)
     magnitude[magnitude == 0] = np.finfo(float).eps
     dB = 20 * np.log10(magnitude)
 
-    plt.figure(figsize=(12, 6))
+    plt.figure(figsize=(12, 6)) 
     plt.plot(w * fs / (2 * np.pi), dB, 'b')
     plt.title('Magnitude Response for Combined Bandpass Filter')
     plt.xlabel('Frequency [Hz]')
@@ -428,16 +459,15 @@ if __name__ == "__main__":
     plt.grid(True)
     plt.show()
 
-    # 2. Analyze Derivative Filter
     b_deriv, a_deriv = original_derivative_filter(fs)
     print("\nAnalyzing Derivative Filter")
     plot_frequency_response(b_deriv, a_deriv, fs, "Derivative Filter")
     plot_pole_zero(b_deriv, a_deriv, "Derivative Filter")
     plot_group_delay(b_deriv, a_deriv, fs, "Derivative Filter")
 
-    # 3. Analyze Moving Window Integrator
     b_integ, a_integ = original_integrator()
     print("\nAnalyzing Moving Window Integrator")
     plot_frequency_response(b_integ, a_integ, fs, "Moving Window Integrator")
     plot_pole_zero(b_integ, a_integ, "Moving Window Integrator")
     plot_group_delay(b_integ, a_integ, fs, "Moving Window Integrator")
+
