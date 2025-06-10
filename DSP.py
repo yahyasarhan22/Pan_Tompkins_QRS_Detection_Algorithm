@@ -339,12 +339,12 @@ if __name__ == "__main__":
     # Load MIT-BIH record
     # This loads the ECG waveform data from record 215.
     # Think of this as: “Give me the actual heartbeat signal for patient 101.”
-    record = wfdb.rdrecord(r"C:\Users\yahya_k6rln48\OneDrive\Desktop\DSP_Project\mit-bih-arrhythmia-database-1.0.0\mit-bih-arrhythmia-database-1.0.0\215", sampto=3000)
+    record = wfdb.rdrecord(r"C:\Users\yahya_k6rln48\OneDrive\Desktop\DSP_Project\mit-bih-arrhythmia-database-1.0.0\mit-bih-arrhythmia-database-1.0.0\100", sampto=3000)
     # 'atr' tells wfdb that you're reading the annotation file.
     # annotation.sample will give you the indices of each labeled beat.
     # annotation.symbol gives the type of beat (e.g., normal, ventricular, etc.).
     # This is the ground truth: used to check how accurate your QRS detection is.
-    annotation = wfdb.rdann(r"C:\Users\yahya_k6rln48\OneDrive\Desktop\DSP_Project\mit-bih-arrhythmia-database-1.0.0\mit-bih-arrhythmia-database-1.0.0\215", 'atr', sampto=3000)
+    annotation = wfdb.rdann(r"C:\Users\yahya_k6rln48\OneDrive\Desktop\DSP_Project\mit-bih-arrhythmia-database-1.0.0\mit-bih-arrhythmia-database-1.0.0\100", 'atr', sampto=3000)
 
     ecg_signal = record.p_signal[:, 0]
     true_peaks = annotation.sample
