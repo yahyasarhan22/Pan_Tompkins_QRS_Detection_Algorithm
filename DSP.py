@@ -1,8 +1,8 @@
-# Yahya Sarhan                                Fadi Bassous                                                 Maysa Khanfar
+# Yahya Sarhan, Fadi Bassous, Maysa Khanfar
 import wfdb
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.signal import butter, filtfilt, find_peaks,freqz,tf2zpk,lfilter,group_delay
+from scipy.signal import  find_peaks,freqz,tf2zpk,lfilter,group_delay
 import  warnings
 
 # 1. Bandpass Filter (5-15 Hz)
@@ -11,7 +11,7 @@ def bandpass_filter(signal):
     Implements the Pan-Tompkins bandpass filter by cascading:
     - Low-pass filter: cutoff ~11 Hz
     - High-pass filter: cutoff ~5 Hz
-    Sampling rate = 200 Hz, integer coefficients
+    Sampling rate = 200 Hz
     """
     # Low-pass filter: y(n) = 2y(n-1) - y(n-2) + x(n) - 2x(n-6) + x(n-12)
     lp = np.zeros_like(signal)
@@ -56,7 +56,7 @@ def moving_window_integration(signal, window_size=30):
     """
         This line performs convolution, which means:
           Slide the averaging window across the signal.
-          At each point, multiply-and-sum the overlapping values → get a smoothed version of the signal.
+          At each point, multiply-and-sum the overlapping values, get a smoothed version of the signal.
         mode='same' ensures the output signal is the same length as the input.
     """
     integrated_signal = np.convolve(signal, window, mode='same')
@@ -69,12 +69,11 @@ def static_threshold(signal, fs=200, plot_only=False):
     mean_signal = np.mean(signal)
     std_signal = np.std(signal)
     #std stands for standard deviation, it measures how much the values in a signal vary around the mean.
-    threshold = mean_signal + 0.5 * std_signal  # Adjust multiplier as needed
+    threshold = mean_signal + 0.5 * std_signal
 
-    threshold_array = np.full_like(signal, threshold)  # ✅ always define this
+    threshold_array = np.full_like(signal, threshold)
 
     if plot_only:
-        # Just plot with the threshold line, no peak detection
         plot_signal(signal, "Static Thresholded Signal (preview only)", fs, threshold=threshold_array, time_window_sec=10)
         return None
     else:
@@ -84,10 +83,10 @@ def static_threshold(signal, fs=200, plot_only=False):
         plot_signal(signal, "Static Thresholded Signal (with detected peaks)", fs, peaks=peaks, threshold=threshold_array, time_window_sec=10)
         return peaks
 
-# 6. LMS-based Adaptive Thresholding (improved)
+# 6. LMS-based Adaptive Thresholding
 def lms_threshold(signal, fs=200, mu=0.01, window_size=150):
     """
-    Improved LMS-based adaptive thresholding that tracks signal envelope
+    LMS-based adaptive thresholding that tracks signal envelope
     and returns peak locations.
     """
     threshold = np.zeros_like(signal)
@@ -203,7 +202,7 @@ def evaluate_performance(true_peaks, detected_peaks, tolerance=0.1, fs=200):
     }
 
 
-# Updated plotting function
+# plotting function
 def plot_signal(signal, title, fs, peaks=None, threshold=None, time_window_sec=10, normalize=False, smooth=True):
     plt.figure(figsize=(12, 5))
 
@@ -262,12 +261,12 @@ warnings.filterwarnings('ignore', category=UserWarning)
 # 1. Bandpass Filter Analysis (as per original paper)
 def original_bandpass_filters(fs=200):
     """Implement the exact filters from the Pan-Tompkins paper"""
-    # Low-pass filter (cutoff ~11 Hz)
+    # Low-pass filter (cutoff 11 Hz)
     # H(z) = (1 - z^-6)^2 / (1 - z^-1)^2
     b_low = np.array([1, 0, 0, 0, 0, 0, -2, 0, 0, 0, 0, 0, 1])
     a_low = np.array([1, -2, 1])
 
-    # High-pass filter (cutoff ~5 Hz)
+    # High-pass filter (cutoff 5 Hz)
     # H(z) = (-1 + 32z^-16 + z^-32) / (1 + z^-1)
     b_high = np.zeros(33)
     b_high[0] = -1
@@ -349,7 +348,7 @@ def plot_pole_zero(b, a, title=""):
     plt.show()
 
 
-# Function to plot group delay with safe handling
+# Function to plot group delay
 def plot_group_delay(b, a, fs=200, title=""):
     try:
         w, gd = group_delay((b, a), w=2000)
@@ -386,7 +385,7 @@ if __name__ == "__main__":
         fs = 200
         DELAY = 39
 
-        # Delay-corrected true peaks
+        # Delay true peaks
         true_peaks = annotation.sample - DELAY
         true_peaks = true_peaks[(true_peaks >= 0) & (true_peaks < len(ecg_signal))]
 
@@ -397,7 +396,7 @@ if __name__ == "__main__":
         peaks_lms = detect_qrs(ecg_signal, fs=fs, use_lms=True)
         peaks_static = detect_qrs(ecg_signal, fs=fs, use_lms=False)
 
-        # Delay-correct detected peaks
+        # Delay detected peaks
         peaks_lms = peaks_lms - DELAY
         peaks_static = peaks_static - DELAY
 
@@ -425,11 +424,8 @@ if __name__ == "__main__":
 
 
     # === Run for Clean and Noisy signals ===
-    run_analysis("100", "Clean", sampto=None)
-    run_analysis("215", "Noisy", sampto=None)
-
+    run_analysis("108", "Clean", sampto=3000)
     ########################################
-    # Sampling frequency from the paper
     fs = 200
     b_low, a_low, b_high, a_high = original_bandpass_filters(fs)
 
@@ -451,13 +447,46 @@ if __name__ == "__main__":
     magnitude[magnitude == 0] = np.finfo(float).eps
     dB = 20 * np.log10(magnitude)
 
-    plt.figure(figsize=(12, 6)) 
+    plt.figure(figsize=(12, 6))
     plt.plot(w * fs / (2 * np.pi), dB, 'b')
     plt.title('Magnitude Response for Combined Bandpass Filter')
     plt.xlabel('Frequency [Hz]')
     plt.ylabel('Magnitude [dB]')
     plt.grid(True)
     plt.show()
+    # 2. Phase Response
+    phase = np.angle(h_combined)  # Phase in radians
+
+    plt.figure(figsize=(12, 6))
+    plt.plot(w * fs / (2 * np.pi), phase, 'r')
+    plt.title('Phase Response for Combined Bandpass Filter')
+    plt.xlabel('Frequency [Hz]')
+    plt.ylabel('Phase [radians]')
+    plt.grid(True)
+    plt.show()
+    # 3. Pole-Zero Plot
+    # Combine numerator (b) and denominator (a) for the cascaded filters
+    from scipy.signal import convolve
+
+    b_bandpass = convolve(b_low, b_high)  # Numerator coefficients
+    a_bandpass = convolve(a_low, a_high)  # Denominator coefficients
+
+    plot_pole_zero(b_bandpass, a_bandpass, "Combined Bandpass Filter")
+
+    # 4. Group Delay for Combined Bandpass Filter
+    try:
+        w_gd, gd = group_delay((b_bandpass, a_bandpass), w=2000)
+        gd = np.nan_to_num(gd)  # Handle NaN/Inf
+
+        plt.figure(figsize=(12, 6))
+        plt.plot(w_gd * fs / (2 * np.pi), gd, 'g')
+        plt.title('Group Delay for Combined Bandpass Filter')
+        plt.xlabel('Frequency [Hz]')
+        plt.ylabel('Group Delay [samples]')
+        plt.grid(True)
+        plt.show()
+    except Exception as e:
+        print(f"Error calculating group delay: {e}")
 
     b_deriv, a_deriv = original_derivative_filter(fs)
     print("\nAnalyzing Derivative Filter")
@@ -470,4 +499,5 @@ if __name__ == "__main__":
     plot_frequency_response(b_integ, a_integ, fs, "Moving Window Integrator")
     plot_pole_zero(b_integ, a_integ, "Moving Window Integrator")
     plot_group_delay(b_integ, a_integ, fs, "Moving Window Integrator")
+print("\nAnalyzing Combined Bandpass Filter")
 
